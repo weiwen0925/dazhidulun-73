@@ -288,6 +288,20 @@ body{font-size:20px!important;}
 .site-footer,.site-footer p{font-size:15px!important;}
 </style>
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 <style id="wy-preguard">
 html{visibility:hidden!important;}
 @media print{
@@ -314,7 +328,7 @@ input,textarea{user-select:text!important;}
 <meta name="GPTBot" content="noai">
 <meta name="ClaudeBot" content="noai">
 <meta name="anthropic-ai" content="noai">
-<meta name="wy-full-protection" content="v8-silent">
+<meta name="wy-full-protection" content="v8.1-silent">
 
 </head>
 <body oncontextmenu="return false" oncopy="return false" oncut="return false"
@@ -1509,6 +1523,47 @@ h5{font-size:18.5px!important;}
   },true);
 })();
 </script>
+
+
+<script id="wy-l1-decoder">
+(function(){
+  function _l1dec(b64, key){
+    try{
+      var bin = atob(b64);
+      var out = '';
+      for(var i=0;i<bin.length;i++){
+        out += String.fromCharCode(bin.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+      }
+      return decodeURIComponent(escape(out));
+    }catch(e){ return ''; }
+  }
+  function _decAll(){
+    var key = "wy73";
+    document.querySelectorAll('[data-l1-enc]').forEach(function(el){
+      try{
+        var enc = el.getAttribute('data-l1-enc');
+        if(!enc) return;
+        var html = _l1dec(enc, key);
+        // toc-name 含 <small>，需用 innerHTML
+        if(el.classList.contains('toc-name')){
+          el.innerHTML = html;
+        } else {
+          el.textContent = html;
+        }
+        el.removeAttribute('data-l1-enc');
+      }catch(e){}
+    });
+  }
+  // 等 __wyReady 通過
+  if(window.__wyReady && window.__wyReady.then){
+    window.__wyReady.then(_decAll);
+  } else {
+    document.addEventListener('DOMContentLoaded', _decAll);
+  }
+})();
+</script>
+
+
 <script id="wy-protection-l1l8">
 (function(){
   'use strict';
@@ -1573,34 +1628,66 @@ h5{font-size:18.5px!important;}
     return;
   }
 
-  /* ============ L8 · 線上活性 HEAD ping ============ */
-  function _liveness(){
-    return new Promise(function(resolve, reject){
-      var url = location.protocol + '//' + ALLOWED_HOST + ALLOWED_PATH +
-                '?_wyping=' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
-      var done = false, t = setTimeout(function(){
-        if(!done){ done = true; reject(new Error('timeout')); }
-      }, 6000);
-      try{
-        fetch(url, {method:'HEAD', cache:'no-store', mode:'no-cors', credentials:'omit'})
-          .then(function(){ if(!done){ done=true; clearTimeout(t); resolve(true); } })
-          .catch(function(){ if(!done){ done=true; clearTimeout(t); reject(new Error('fetch-fail')); } });
-      }catch(e){
-        if(!done){ done=true; clearTimeout(t); reject(e); }
-      }
-    });
-  }
-  _liveness().then(function(){
-    /* 通過 — 解除 preguard，啟動 L1 解碼 */
+  /* ============ L8 · 線上活性 ping（容錯版）============
+     策略：
+       1) navigator.onLine === false → 立即拒絕（離線快路徑）
+       2) 嘗試 fetch GET（同源，無需 no-cors；HEAD 在 GitHub Pages 偶有 405）
+       3) fetch 失敗或 timeout，但 navigator.onLine === true → 視為通過
+       4) 即便 navigator.onLine 不可靠，3 秒後強制 resolve，避免永久封鎖
+     L4 已同步擋掉 file:// 與錯誤 host/path，L8 只負責「離線快取重開」這一情境。
+  */
+  function _passReady(){
     var pg = document.getElementById('wy-preguard');
-    if(pg) pg.parentNode.removeChild(pg);
+    if(pg && pg.parentNode) pg.parentNode.removeChild(pg);
     document.documentElement.style.visibility = '';
     window.__wyOriginOK = true;
     _runL1Decode();
     _resolveReady(true);
-  }).catch(function(){
-    _silentWipe();
-  });
+  }
+  function _liveness(){
+    return new Promise(function(resolve, reject){
+      // 1) 離線快路徑
+      try{
+        if(navigator.onLine === false){ return reject(new Error('offline')); }
+      }catch(_){}
+      var url = location.protocol + '//' + ALLOWED_HOST + ALLOWED_PATH +
+                '?_wyping=' + Date.now() + '.' + Math.random().toString(36).slice(2,8);
+      var done = false;
+      var t = setTimeout(function(){
+        if(done) return; done = true;
+        // timeout：若仍宣稱 online，放行（多數情況是 GH Pages 偶發慢）
+        try{ if(navigator.onLine !== false){ return resolve(true); } }catch(_){}
+        reject(new Error('timeout'));
+      }, 3000);
+      try{
+        fetch(url, {method:'GET', cache:'no-store', credentials:'omit'})
+          .then(function(){
+            if(done) return; done=true; clearTimeout(t); resolve(true);
+          })
+          .catch(function(){
+            if(done) return; done=true; clearTimeout(t);
+            try{ if(navigator.onLine !== false){ return resolve(true); } }catch(_){}
+            reject(new Error('fetch-fail'));
+          });
+      }catch(e){
+        if(done) return; done=true; clearTimeout(t);
+        try{ if(navigator.onLine !== false){ return resolve(true); } }catch(_){}
+        reject(e);
+      }
+    });
+  }
+  _liveness().then(_passReady).catch(function(){ _silentWipe(); });
+
+  /* ============ 安全網：5 秒 fail-safe ============
+     若 _liveness 本身發生未預期錯誤導致 promise 永不 settle，
+     5 秒後強制 _passReady 避免使用者看到永久空白頁。
+     L4 已同步擋住 file:// + 錯誤 host，這層 fail-safe 不會放行未授權來源。
+  */
+  setTimeout(function(){
+    if(!window.__wyOriginOK && !window.__wyLocked){
+      try{ _passReady(); }catch(_){}
+    }
+  }, 5000);
 
   /* ============ L1 · 標題解碼 ============ */
   function _l1decode(b64, key){
